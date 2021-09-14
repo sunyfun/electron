@@ -1,16 +1,32 @@
-# The `window.open` function
+# Opening windows from the renderer
 
-When `window.open` is called to create a new window in a web page, a new instance
-of `BrowserWindow` will be created for the `url` and a proxy will be returned
-to `window.open` to let the page have limited control over it.
+There are several ways to control how windows are created from trusted or
+untrusted content within a renderer. Windows can be created from the renderer in two ways:
 
-The proxy has limited standard functionality implemented to be
-compatible with traditional web pages. For full control of the new window
-you should create a `BrowserWindow` directly.
+* clicking on links or submitting forms adorned with `target=_blank`
+* JavaScript calling `window.open()`
 
-The newly created `BrowserWindow` will inherit parent window's options by
-default, to override inherited options you can set them in the `features`
-string.
+For same-origin content, the new window is created within the same process,
+enabling the parent to access the child window directly. This can be very
+useful for app sub-windows that act as preference panels, or similar, as the
+parent can render to the sub-window directly, as if it were a `div` in the
+parent. This is the same behavior as in the browser.
+
+When `nativeWindowOpen` is set to false, `window.open` instead results in the
+creation of a [`BrowserWindowProxy`](browser-window-proxy.md), a light wrapper
+around `BrowserWindow`.
+
+Electron pairs this native Chrome `Window` with a BrowserWindow under the hood.
+You can take advantage of all the customization available when creating a
+BrowserWindow in the main process by using `webContents.setWindowOpenHandler()`
+for renderer-created windows.
+
+BrowserWindow constructor options are set by, in increasing precedence
+order: parsed options from the `features` string from `window.open()`,
+security-related webPreferences inherited from the parent, and options given by
+[`webContents.setWindowOpenHandler`](web-contents.md#contentssetwindowopenhandlerhandler).
+Note that `webContents.setWindowOpenHandler` has final say and full privilege
+because it is invoked in the main process.
 
 ### `window.open(url[, frameName][, features])`
 
@@ -18,53 +34,104 @@ string.
 * `frameName` String (optional)
 * `features` String (optional)
 
-Creates a new window and returns an instance of `BrowserWindowProxy` class.
+Returns [`BrowserWindowProxy`](browser-window-proxy.md) | [`Window`](https://developer.mozilla.org/en-US/docs/Web/API/Window)
 
-The `features` string follows the format of standard browser, but each feature
-has to be a field of `BrowserWindow`'s options.
+`features` is a comma-separated key-value list, following the standard format of
+the browser. Electron will parse `BrowserWindowConstructorOptions` out of this
+list where possible, for convenience. For full control and better ergonomics,
+consider using `webContents.setWindowOpenHandler` to customize the
+BrowserWindow creation.
 
-### `window.opener.postMessage(message, targetOrigin)`
+A subset of `WebPreferences` can be set directly,
+unnested, from the features string: `zoomFactor`, `nodeIntegration`, `preload`,
+`javascript`, `contextIsolation`, and `webviewTag`.
 
-* `message` String
-* `targetOrigin` String
+For example:
 
-Sends a message to the parent window with the specified origin or `*` for no
-origin preference.
+```js
+window.open('https://github.com', '_blank', 'top=500,left=200,frame=false,nodeIntegration=no')
+```
 
-## Class: BrowserWindowProxy
+**Notes:**
 
-The `BrowserWindowProxy` object is returned from `window.open` and provides
-limited functionality with the child window.
+* Node integration will always be disabled in the opened `window` if it is
+  disabled on the parent window.
+* Context isolation will always be enabled in the opened `window` if it is
+  enabled on the parent window.
+* JavaScript will always be disabled in the opened `window` if it is disabled on
+  the parent window.
+* Non-standard features (that are not handled by Chromium or Electron) given in
+  `features` will be passed to any registered `webContents`'s
+  `did-create-window` event handler in the `options` argument.
+* `frameName` follows the specification of `windowName` located in the [native documentation](https://developer.mozilla.org/en-US/docs/Web/API/Window/open#parameters).
 
-### `BrowserWindowProxy.blur()`
+To customize or cancel the creation of the window, you can optionally set an
+override handler with `webContents.setWindowOpenHandler()` from the main
+process. Returning `{ action: 'deny' }` cancels the window. Returning `{
+action: 'allow', overrideBrowserWindowOptions: { ... } }` will allow opening
+the window and setting the `BrowserWindowConstructorOptions` to be used when
+creating the window. Note that this is more powerful than passing options
+through the feature string, as the renderer has more limited privileges in
+deciding security preferences than the main process.
 
-Removes focus from the child window.
+### Native `Window` example
 
-### `BrowserWindowProxy.close()`
+```javascript
+// main.js
+const mainWindow = new BrowserWindow()
 
-Forcefully closes the child window without calling its unload event.
+// In this example, only windows with the `about:blank` url will be created.
+// All other urls will be blocked.
+mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  if (url === 'about:blank') {
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        frame: false,
+        fullscreenable: false,
+        backgroundColor: 'black',
+        webPreferences: {
+          preload: 'my-child-window-preload-script.js'
+        }
+      }
+    }
+  }
+  return { action: 'deny' }
+})
+```
 
-### `BrowserWindowProxy.closed`
+```javascript
+// renderer process (mainWindow)
+const childWindow = window.open('', 'modal')
+childWindow.document.write('<h1>Hello</h1>')
+```
 
-Set to true after the child window gets closed.
+### `BrowserWindowProxy` example
 
-### `BrowserWindowProxy.eval(code)`
+```javascript
 
-* `code` String
+// main.js
+const mainWindow = new BrowserWindow({
+  webPreferences: { nativeWindowOpen: false }
+})
 
-Evaluates the code in the child window.
+mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  if (url.startsWith('https://github.com/')) {
+    return { action: 'allow' }
+  }
+  return { action: 'deny' }
+})
 
-### `BrowserWindowProxy.focus()`
+mainWindow.webContents.on('did-create-window', (childWindow) => {
+  // For example...
+  childWindow.webContents.on('will-navigate', (e) => {
+    e.preventDefault()
+  })
+})
+```
 
-Focuses the child window (brings the window to front).
-
-### `BrowserWindowProxy.postMessage(message, targetOrigin)`
-
-* `message` String
-* `targetOrigin` String
-
-Sends a message to the child window with the specified origin or `*` for no
-origin preference.
-
-In addition to these methods, the child window implements `window.opener` object
-with no properties and a single method.
+```javascript
+// renderer.js
+const windowProxy = window.open('https://github.com/', null, 'minimizable=false')
+windowProxy.postMessage('hi', '*')
+```

@@ -1,75 +1,52 @@
 # screen
 
-The `screen` module retrieves information about screen size, displays, cursor
-position, etc. You should not use this module until the `ready` event of the
-`app` module is emitted.
+> Retrieve information about screen size, displays, cursor position, etc.
 
-`screen` is an [EventEmitter](http://nodejs.org/api/events.html#events_class_events_eventemitter).
+Process: [Main](../glossary.md#main-process)
+
+This module cannot be used until the `ready` event of the `app`
+module is emitted.
+
+`screen` is an [EventEmitter][event-emitter].
 
 **Note:** In the renderer / DevTools, `window.screen` is a reserved DOM
-property, so writing `var screen = require('electron').screen` will not work.
-In our examples below, we use `electronScreen` as the variable name instead.
+property, so writing `let { screen } = require('electron')` will not work.
+
 An example of creating a window that fills the whole screen:
 
-```javascript
-const electron = require('electron');
-const app = electron.app;
-const BrowserWindow = electron.BrowserWindow;
+```javascript fiddle='docs/fiddles/screen/fit-screen'
+const { app, BrowserWindow, screen } = require('electron')
 
-var mainWindow;
-
-app.on('ready', function() {
-  var electronScreen = electron.screen;
-  var size = electronScreen.getPrimaryDisplay().workAreaSize;
-  mainWindow = new BrowserWindow({ width: size.width, height: size.height });
-});
+let win
+app.whenReady().then(() => {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize
+  win = new BrowserWindow({ width, height })
+  win.loadURL('https://github.com')
+})
 ```
 
 Another example of creating a window in the external display:
 
 ```javascript
-const electron = require('electron');
-const app = electron.app;
-const BrowserWindow = electron.BrowserWindow;
+const { app, BrowserWindow, screen } = require('electron')
 
-var mainWindow;
+let win
 
-app.on('ready', function() {
-  var electronScreen = electron.screen;
-  var displays = electronScreen.getAllDisplays();
-  var externalDisplay = null;
-  for (var i in displays) {
-    if (displays[i].bounds.x != 0 || displays[i].bounds.y != 0) {
-      externalDisplay = displays[i];
-      break;
-    }
-  }
+app.whenReady().then(() => {
+  const displays = screen.getAllDisplays()
+  const externalDisplay = displays.find((display) => {
+    return display.bounds.x !== 0 || display.bounds.y !== 0
+  })
 
   if (externalDisplay) {
-    mainWindow = new BrowserWindow({
+    win = new BrowserWindow({
       x: externalDisplay.bounds.x + 50,
       y: externalDisplay.bounds.y + 50
-    });
+    })
+    win.loadURL('https://github.com')
   }
-});
+})
 ```
-
-## The `Display` object
-
-The `Display` object represents a physical display connected to the system. A
-fake `Display` may exist on a headless system, or a `Display` may correspond to
-a remote, virtual display.
-
-* `display` object
-  * `id` Integer - Unique identifier associated with the display.
-  * `rotation` Integer - Can be 0, 1, 2, 3, each represents screen rotation in
-    clock-wise degrees of 0, 90, 180, 270.
-  * `scaleFactor` Number - Output device's pixel scale factor.
-  * `touchSupport` String - Can be `available`, `unavailable`, `unknown`.
-  * `bounds` Object
-  * `size` Object
-  * `workArea` Object
-  * `workAreaSize` Object
 
 ## Events
 
@@ -80,7 +57,7 @@ The `screen` module emits the following events:
 Returns:
 
 * `event` Event
-* `newDisplay` Object
+* `newDisplay` [Display](structures/display.md)
 
 Emitted when `newDisplay` has been added.
 
@@ -89,7 +66,7 @@ Emitted when `newDisplay` has been added.
 Returns:
 
 * `event` Event
-* `oldDisplay` Object
+* `oldDisplay` [Display](structures/display.md)
 
 Emitted when `oldDisplay` has been removed.
 
@@ -98,8 +75,8 @@ Emitted when `oldDisplay` has been removed.
 Returns:
 
 * `event` Event
-* `display` Object
-* `changedMetrics` Array
+* `display` [Display](structures/display.md)
+* `changedMetrics` String[]
 
 Emitted when one or more metrics change in a `display`. The `changedMetrics` is
 an array of strings that describe the changes. Possible changes are `bounds`,
@@ -111,30 +88,71 @@ The `screen` module has the following methods:
 
 ### `screen.getCursorScreenPoint()`
 
-Returns the current absolute position of the mouse pointer.
+Returns [`Point`](structures/point.md)
+
+The current absolute position of the mouse pointer.
+
+**Note:** The return value is a DIP point, not a screen physical point.
 
 ### `screen.getPrimaryDisplay()`
 
-Returns the primary display.
+Returns [`Display`](structures/display.md) - The primary display.
 
 ### `screen.getAllDisplays()`
 
-Returns an array of displays that are currently available.
+Returns [`Display[]`](structures/display.md) - An array of displays that are currently available.
 
 ### `screen.getDisplayNearestPoint(point)`
 
-* `point` Object
-  * `x` Integer
-  * `y` Integer
+* `point` [Point](structures/point.md)
 
-Returns the display nearest the specified point.
+Returns [`Display`](structures/display.md) - The display nearest the specified point.
 
 ### `screen.getDisplayMatching(rect)`
 
-* `rect` Object
-  * `x` Integer
-  * `y` Integer
-  * `width` Integer
-  * `height` Integer
+* `rect` [Rectangle](structures/rectangle.md)
 
-Returns the display that most closely intersects the provided bounds.
+Returns [`Display`](structures/display.md) - The display that most closely
+intersects the provided bounds.
+
+### `screen.screenToDipPoint(point)` _Windows_
+
+* `point` [Point](structures/point.md)
+
+Returns [`Point`](structures/point.md)
+
+Converts a screen physical point to a screen DIP point.
+The DPI scale is performed relative to the display containing the physical point.
+
+### `screen.dipToScreenPoint(point)` _Windows_
+
+* `point` [Point](structures/point.md)
+
+Returns [`Point`](structures/point.md)
+
+Converts a screen DIP point to a screen physical point.
+The DPI scale is performed relative to the display containing the DIP point.
+
+### `screen.screenToDipRect(window, rect)` _Windows_
+
+* `window` [BrowserWindow](browser-window.md) | null
+* `rect` [Rectangle](structures/rectangle.md)
+
+Returns [`Rectangle`](structures/rectangle.md)
+
+Converts a screen physical rect to a screen DIP rect.
+The DPI scale is performed relative to the display nearest to `window`.
+If `window` is null, scaling will be performed to the display nearest to `rect`.
+
+### `screen.dipToScreenRect(window, rect)` _Windows_
+
+* `window` [BrowserWindow](browser-window.md) | null
+* `rect` [Rectangle](structures/rectangle.md)
+
+Returns [`Rectangle`](structures/rectangle.md)
+
+Converts a screen DIP rect to a screen physical rect.
+The DPI scale is performed relative to the display nearest to `window`.
+If `window` is null, scaling will be performed to the display nearest to `rect`.
+
+[event-emitter]: https://nodejs.org/api/events.html#events_class_eventemitter

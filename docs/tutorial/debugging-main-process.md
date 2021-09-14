@@ -1,76 +1,33 @@
 # Debugging the Main Process
 
-The browser window DevTools can only debug the renderer process scripts (i.e.
-the web pages). In order to provide a way to debug the scripts from the main
-process, Electron has provided the `--debug` and `--debug-brk` switches.
+The DevTools in an Electron browser window can only debug JavaScript that's
+executed in that window (i.e. the web pages). To debug JavaScript that's
+executed in the main process you will need to use an external debugger and
+launch Electron with the `--inspect` or `--inspect-brk` switch.
 
 ## Command Line Switches
 
-Use the following command line switches to debug Electron's main process:
+Use one of the following command line switches to enable debugging of the main
+process:
 
-### `--debug=[port]`
+### `--inspect=[port]`
 
-When this switch is used Electron will listen for V8 debugger protocol
-messages on `port`. The default `port` is `5858`.
+Electron will listen for V8 inspector protocol messages on the specified `port`,
+an external debugger will need to connect on this port. The default `port` is
+`5858`.
 
-### `--debug-brk=[port]`
-
-Like `--debug` but pauses the script on the first line.
-
-## Use node-inspector for Debugging
-
-__Note:__ Electron doesn't currently work very well
-with node-inspector, and the main process will crash if you inspect the
-`process` object under node-inspector's console.
-
-### 1. Make sure you have [node-gyp required tools][node-gyp-required-tools] installed
-
-### 2. Install [node-inspector][node-inspector]
-
-```bash
-$ npm install node-inspector
+```shell
+electron --inspect=5858 your/app
 ```
 
-### 3. Install a patched version of `node-pre-gyp`
+### `--inspect-brk=[port]`
 
-```bash
-$ npm install git+https://git@github.com/enlight/node-pre-gyp.git#detect-electron-runtime-in-find
-```
+Like `--inspect` but pauses execution on the first line of JavaScript.
 
-### 4. Recompile the `node-inspector` `v8` modules for electron (change the target to your electron version number)
+## External Debuggers
 
-```bash
-$ node_modules/.bin/node-pre-gyp --target=0.36.2 --runtime=electron --fallback-to-build --directory node_modules/v8-debug/ --dist-url=https://atom.io/download/atom-shell reinstall
-$ node_modules/.bin/node-pre-gyp --target=0.36.2 --runtime=electron --fallback-to-build --directory node_modules/v8-profiler/ --dist-url=https://atom.io/download/atom-shell reinstall
-```
+You will need to use a debugger that supports the V8 inspector protocol.
 
-See also [How to install native modules](how-to-install-native-modules).
-
-### 5. Enable debug mode for Electron
-
-You can either start Electron with a debug flag like:
-
-```bash
-$ electron --debug=5858 your/app
-```
-
-or, to pause your script on the first line:
-
-```bash
-$ electron --debug-brk=5858 your/app
-```
-
-### 6. Start the [node-inspector][node-inspector] server using electron
-
-```bash
-$ ELECTRON_RUN_AS_NODE=true path/to/electron.exe node_modules/node-inspector/bin/inspector.js
-```
-
-### 7. Load the debugger UI
-
-Open http://127.0.0.1:8080/debug?ws=127.0.0.1:8080&port=5858 in the Chrome browser. You may have to click pause if starting with debug-brk to see the entry line.
-
-[node-inspector]: https://github.com/node-inspector/node-inspector
-[node-gyp-required-tools]: https://github.com/nodejs/node-gyp#installation
-[how-to-install-native-modules]: using-native-node-modules.md#how-to-install-native-modules
-
+- Connect Chrome by visiting `chrome://inspect` and selecting to inspect the
+  launched Electron app present there.
+- [Debugging in VSCode](debugging-vscode.md)

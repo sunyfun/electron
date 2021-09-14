@@ -1,4 +1,4 @@
-var ipcRenderer = require('electron').ipcRenderer;
-ipcRenderer.on('ping', function(event, message) {
+const { ipcRenderer } = require('electron');
+ipcRenderer.on('ping', function (event, message) {
   ipcRenderer.sendToHost('pong', message);
 });

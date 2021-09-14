@@ -1,510 +1,867 @@
-const assert = require('assert');
+const { expect } = require('chai');
 const path = require('path');
 const http = require('http');
 const url = require('url');
+const { ipcRenderer } = require('electron');
+const { emittedOnce, waitForEvent } = require('./events-helpers');
+const { ifdescribe, ifit, delay } = require('./spec-helpers');
 
-describe('<webview> tag', function() {
-  this.timeout(10000);
+const features = process._linkedBinding('electron_common_features');
+const nativeModulesEnabled = process.env.ELECTRON_SKIP_NATIVE_MODULE_TESTS;
 
-  var fixtures = path.join(__dirname, 'fixtures');
-  var webview = null;
+/* Most of the APIs here don't use standard callbacks */
+/* eslint-disable standard/no-callback-literal */
 
-  beforeEach(function() {
-    webview = new WebView;
-  });
+describe('<webview> tag', function () {
+  this.timeout(3 * 60 * 1000);
 
-  afterEach(function() {
-    if (document.body.contains(webview)) {
-      document.body.removeChild(webview);
+  const fixtures = path.join(__dirname, 'fixtures');
+  let webview = null;
+
+  const loadWebView = async (webview, attributes = {}) => {
+    for (const [name, value] of Object.entries(attributes)) {
+      webview.setAttribute(name, value);
     }
-  });
+    document.body.appendChild(webview);
+    await waitForEvent(webview, 'did-finish-load');
+    return webview;
+  };
 
-  describe('src attribute', function() {
-    it('specifies the page to load', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'a');
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/a.html";
-      document.body.appendChild(webview);
+  const startLoadingWebViewAndWaitForMessage = async (webview, attributes = {}) => {
+    loadWebView(webview, attributes); // Don't wait for load to be finished.
+    const event = await waitForEvent(webview, 'console-message');
+    return event.message;
+  };
+
+  async function loadFileInWebView (webview, attributes = {}) {
+    const thisFile = url.format({
+      pathname: __filename.replace(/\\/g, '/'),
+      protocol: 'file',
+      slashes: true
     });
-
-    it('navigates to new page when changed', function(done) {
-      var listener = function() {
-        webview.src = "file://" + fixtures + "/pages/b.html";
-        webview.addEventListener('console-message', function(e) {
-          assert.equal(e.message, 'b');
-          done();
+    const src = `<script>
+      function loadFile() {
+        return new Promise((resolve) => {
+          fetch('${thisFile}').then(
+            () => resolve('loaded'),
+            () => resolve('failed')
+          )
         });
-        webview.removeEventListener('did-finish-load', listener);
-      };
-      webview.addEventListener('did-finish-load', listener);
-      webview.src = "file://" + fixtures + "/pages/a.html";
-      document.body.appendChild(webview);
-    });
+      }
+      console.log('ok');
+    </script>`;
+    attributes.src = `data:text/html;base64,${btoa(unescape(encodeURIComponent(src)))}`;
+    await startLoadingWebViewAndWaitForMessage(webview, attributes);
+    return await webview.executeJavaScript('loadFile()');
+  }
+
+  beforeEach(() => {
+    webview = new WebView();
   });
 
-  describe('nodeintegration attribute', function() {
-    it('inserts no node symbols when not set', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'undefined undefined undefined undefined');
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/c.html";
+  afterEach(() => {
+    if (!document.body.contains(webview)) {
       document.body.appendChild(webview);
-    });
-
-    it('inserts node symbols when set', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'function object object');
-        done();
-      });
-      webview.setAttribute('nodeintegration', 'on');
-      webview.src = "file://" + fixtures + "/pages/d.html";
-      document.body.appendChild(webview);
-    });
-
-    it('loads node symbols after POST navigation when set', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'function object object');
-        done();
-      });
-      webview.setAttribute('nodeintegration', 'on');
-      webview.src = "file://" + fixtures + "/pages/post.html";
-      document.body.appendChild(webview);
-    });
-
-    if (process.platform !== 'win32' || process.execPath.toLowerCase().indexOf('\\out\\d\\') === -1) {
-      it('loads native modules when navigation happens', function(done) {
-        var listener = function() {
-          webview.removeEventListener('did-finish-load', listener);
-          var listener2 = function(e) {
-            assert.equal(e.message, 'function');
-            done();
-          };
-          webview.addEventListener('console-message', listener2);
-          webview.reload();
-        };
-        webview.addEventListener('did-finish-load', listener);
-        webview.setAttribute('nodeintegration', 'on');
-        webview.src = "file://" + fixtures + "/pages/native-module.html";
-        document.body.appendChild(webview);
-      });
     }
+    webview.remove();
   });
 
-  describe('preload attribute', function() {
-    it('loads the script before other scripts in window', function(done) {
-      var listener = function(e) {
-        assert.equal(e.message, 'function object object');
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.setAttribute('preload', fixtures + "/module/preload.js");
-      webview.src = "file://" + fixtures + "/pages/e.html";
-      document.body.appendChild(webview);
-    });
-
-    it('preload script can still use "process" in required modules when nodeintegration is off', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'object undefined object');
-        done();
+  describe('src attribute', () => {
+    it('specifies the page to load', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/a.html`
       });
-      webview.setAttribute('preload', fixtures + "/module/preload-node-off.js");
-      webview.src = "file://" + fixtures + "/api/blank.html";
-      document.body.appendChild(webview);
+      expect(message).to.equal('a');
     });
 
-    it('receives ipc message in preload script', function(done) {
-      var message = 'boom!';
-      var listener = function(e) {
-        assert.equal(e.channel, 'pong');
-        assert.deepEqual(e.args, [message]);
-        webview.removeEventListener('ipc-message', listener);
-        done();
-      };
-      var listener2 = function() {
-        webview.send('ping', message);
-        webview.removeEventListener('did-finish-load', listener2);
-      };
-      webview.addEventListener('ipc-message', listener);
-      webview.addEventListener('did-finish-load', listener2);
-      webview.setAttribute('preload', fixtures + "/module/preload-ipc.js");
-      webview.src = "file://" + fixtures + "/pages/e.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('httpreferrer attribute', function() {
-    it('sets the referrer url', function(done) {
-      var referrer = 'http://github.com/';
-      var listener = function(e) {
-        assert.equal(e.message, referrer);
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.setAttribute('httpreferrer', referrer);
-      webview.src = "file://" + fixtures + "/pages/referrer.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('useragent attribute', function() {
-    it('sets the user agent', function(done) {
-      var referrer = 'Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko';
-      var listener = function(e) {
-        assert.equal(e.message, referrer);
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.setAttribute('useragent', referrer);
-      webview.src = "file://" + fixtures + "/pages/useragent.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('disablewebsecurity attribute', function() {
-    it('does not disable web security when not set', function(done) {
-      var src = "<script src='file://" + __dirname + "/static/jquery-2.0.3.min.js'></script> <script>console.log('ok');</script>";
-      var encoded = btoa(unescape(encodeURIComponent(src)));
-      var listener = function(e) {
-        assert(/Not allowed to load local resource/.test(e.message));
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.src = "data:text/html;base64," + encoded;
-      document.body.appendChild(webview);
-    });
-
-    it('disables web security when set', function(done) {
-      var src = "<script src='file://" + __dirname + "/static/jquery-2.0.3.min.js'></script> <script>console.log('ok');</script>";
-      var encoded = btoa(unescape(encodeURIComponent(src)));
-      var listener = function(e) {
-        assert.equal(e.message, 'ok');
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.setAttribute('disablewebsecurity', '');
-      webview.src = "data:text/html;base64," + encoded;
-      document.body.appendChild(webview);
-    });
-  });
-  describe('partition attribute', function() {
-    it('inserts no node symbols when not set', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'undefined undefined undefined undefined');
-        done();
+    it('navigates to new page when changed', async () => {
+      await loadWebView(webview, {
+        src: `file://${fixtures}/pages/a.html`
       });
-      webview.src = "file://" + fixtures + "/pages/c.html";
-      webview.partition = 'test1';
-      document.body.appendChild(webview);
+
+      webview.src = `file://${fixtures}/pages/b.html`;
+
+      const { message } = await waitForEvent(webview, 'console-message');
+      expect(message).to.equal('b');
     });
 
-    it('inserts node symbols when set', function(done) {
-      webview.addEventListener('console-message', function(e) {
-        assert.equal(e.message, 'function object object');
-        done();
+    it('resolves relative URLs', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        src: '../fixtures/pages/e.html'
       });
-      webview.setAttribute('nodeintegration', 'on');
-      webview.src = "file://" + fixtures + "/pages/d.html";
-      webview.partition = 'test2';
-      document.body.appendChild(webview);
+      expect(message).to.equal('Window script is loaded before preload script');
     });
 
-    it('isolates storage for different id', function(done) {
-      var listener = function(e) {
-        assert.equal(e.message, " 0");
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
+    it('ignores empty values', () => {
+      expect(webview.src).to.equal('');
+
+      for (const emptyValue of ['', null, undefined]) {
+        webview.src = emptyValue;
+        expect(webview.src).to.equal('');
+      }
+    });
+
+    it('does not wait until loadURL is resolved', async () => {
+      await loadWebView(webview, { src: 'about:blank' });
+
+      const before = Date.now();
+      webview.src = 'https://github.com';
+      const now = Date.now();
+
+      // Setting src is essentially sending a sync IPC message, which should
+      // not exceed more than a few ms.
+      //
+      // This is for testing #18638.
+      expect(now - before).to.be.below(100);
+    });
+  });
+
+  describe('nodeintegration attribute', () => {
+    it('inserts no node symbols when not set', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/c.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'undefined',
+        module: 'undefined',
+        process: 'undefined',
+        global: 'undefined'
+      });
+    });
+
+    it('inserts node symbols when set', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/d.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object'
+      });
+    });
+
+    it('loads node symbols after POST navigation when set', async function () {
+      // FIXME Figure out why this is timing out on AppVeyor
+      if (process.env.APPVEYOR === 'True') {
+        this.skip();
+        return;
+      }
+
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/post.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object'
+      });
+    });
+
+    it('disables node integration on child windows when it is disabled on the webview', async () => {
+      const src = url.format({
+        pathname: `${fixtures}/pages/webview-opener-no-node-integration.html`,
+        protocol: 'file',
+        query: {
+          p: `${fixtures}/pages/window-opener-node.html`
+        },
+        slashes: true
+      });
+      loadWebView(webview, {
+        allowpopups: 'on',
+        webpreferences: 'contextIsolation=no',
+        src
+      });
+      const { message } = await waitForEvent(webview, 'console-message');
+      expect(JSON.parse(message).isProcessGlobalUndefined).to.be.true();
+    });
+
+    (nativeModulesEnabled ? it : it.skip)('loads native modules when navigation happens', async function () {
+      await loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/native-module.html`
+      });
+
+      webview.reload();
+
+      const { message } = await waitForEvent(webview, 'console-message');
+      expect(message).to.equal('function');
+    });
+  });
+
+  describe('preload attribute', () => {
+    it('loads the script before other scripts in window', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        preload: `${fixtures}/module/preload.js`,
+        src: `file://${fixtures}/pages/e.html`,
+        contextIsolation: false
+      });
+
+      expect(message).to.be.a('string');
+      expect(message).to.be.not.equal('Window script is loaded before preload script');
+    });
+
+    it('preload script can still use "process" and "Buffer" when nodeintegration is off', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        preload: `${fixtures}/module/preload-node-off.js`,
+        src: `file://${fixtures}/api/blank.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        process: 'object',
+        Buffer: 'function'
+      });
+    });
+
+    it('runs in the correct scope when sandboxed', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        preload: `${fixtures}/module/preload-context.js`,
+        src: `file://${fixtures}/api/blank.html`,
+        webpreferences: 'sandbox=yes'
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function', // arguments passed to it should be availale
+        electron: 'undefined', // objects from the scope it is called from should not be available
+        window: 'object', // the window object should be available
+        localVar: 'undefined' // but local variables should not be exposed to the window
+      });
+    });
+
+    it('preload script can require modules that still use "process" and "Buffer" when nodeintegration is off', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        preload: `${fixtures}/module/preload-node-off-wrapper.js`,
+        src: `file://${fixtures}/api/blank.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        process: 'object',
+        Buffer: 'function'
+      });
+    });
+
+    it('receives ipc message in preload script', async () => {
+      await loadWebView(webview, {
+        preload: `${fixtures}/module/preload-ipc.js`,
+        src: `file://${fixtures}/pages/e.html`
+      });
+
+      const message = 'boom!';
+      webview.send('ping', message);
+
+      const { channel, args } = await waitForEvent(webview, 'ipc-message');
+      expect(channel).to.equal('pong');
+      expect(args).to.deep.equal([message]);
+    });
+
+    it('<webview>.sendToFrame()', async () => {
+      loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        preload: `${fixtures}/module/preload-ipc.js`,
+        src: `file://${fixtures}/pages/ipc-message.html`
+      });
+
+      const { frameId } = await waitForEvent(webview, 'ipc-message');
+
+      const message = 'boom!';
+      webview.sendToFrame(frameId, 'ping', message);
+
+      const { channel, args } = await waitForEvent(webview, 'ipc-message');
+      expect(channel).to.equal('pong');
+      expect(args).to.deep.equal([message]);
+    });
+
+    it('works without script tag in page', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        preload: `${fixtures}/module/preload.js`,
+        src: `file://${fixtures}pages/base-page.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object',
+        Buffer: 'function'
+      });
+    });
+
+    it('resolves relative URLs', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        preload: '../fixtures/module/preload.js',
+        src: `file://${fixtures}/pages/e.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object',
+        Buffer: 'function'
+      });
+    });
+
+    it('ignores empty values', () => {
+      expect(webview.preload).to.equal('');
+
+      for (const emptyValue of ['', null, undefined]) {
+        webview.preload = emptyValue;
+        expect(webview.preload).to.equal('');
+      }
+    });
+  });
+
+  describe('httpreferrer attribute', () => {
+    it('sets the referrer url', (done) => {
+      const referrer = 'http://github.com/';
+      const server = http.createServer((req, res) => {
+        try {
+          expect(req.headers.referer).to.equal(referrer);
+          done();
+        } catch (e) {
+          done(e);
+        } finally {
+          res.end();
+          server.close();
+        }
+      }).listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        loadWebView(webview, {
+          httpreferrer: referrer,
+          src: `http://127.0.0.1:${port}`
+        });
+      });
+    });
+  });
+
+  describe('useragent attribute', () => {
+    it('sets the user agent', async () => {
+      const referrer = 'Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko';
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/useragent.html`,
+        useragent: referrer
+      });
+      expect(message).to.equal(referrer);
+    });
+  });
+
+  describe('disablewebsecurity attribute', () => {
+    it('does not disable web security when not set', async () => {
+      const result = await loadFileInWebView(webview);
+      expect(result).to.equal('failed');
+    });
+
+    it('disables web security when set', async () => {
+      const result = await loadFileInWebView(webview, { disablewebsecurity: '' });
+      expect(result).to.equal('loaded');
+    });
+
+    it('does not break node integration', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        disablewebsecurity: '',
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/d.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object'
+      });
+    });
+
+    it('does not break preload script', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        disablewebsecurity: '',
+        preload: `${fixtures}/module/preload.js`,
+        src: `file://${fixtures}/pages/e.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object',
+        Buffer: 'function'
+      });
+    });
+  });
+
+  describe('partition attribute', () => {
+    it('inserts no node symbols when not set', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        partition: 'test1',
+        src: `file://${fixtures}/pages/c.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'undefined',
+        module: 'undefined',
+        process: 'undefined',
+        global: 'undefined'
+      });
+    });
+
+    it('inserts node symbols when set', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        nodeintegration: 'on',
+        partition: 'test2',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/d.html`
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object'
+      });
+    });
+
+    it('isolates storage for different id', async () => {
       window.localStorage.setItem('test', 'one');
-      webview.addEventListener('console-message', listener);
-      webview.src = "file://" + fixtures + "/pages/partition/one.html";
-      webview.partition = 'test3';
-      document.body.appendChild(webview);
+
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        partition: 'test3',
+        src: `file://${fixtures}/pages/partition/one.html`
+      });
+
+      const parsedMessage = JSON.parse(message);
+      expect(parsedMessage).to.include({
+        numberOfEntries: 0,
+        testValue: null
+      });
     });
 
-    it('uses current session storage when no id is provided', function(done) {
-      var listener = function(e) {
-        assert.equal(e.message, "one 1");
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      window.localStorage.setItem('test', 'one');
-      webview.addEventListener('console-message', listener);
-      webview.src = "file://" + fixtures + "/pages/partition/one.html";
-      document.body.appendChild(webview);
-    });
-  });
+    it('uses current session storage when no id is provided', async () => {
+      const testValue = 'one';
+      window.localStorage.setItem('test', testValue);
 
-  describe('allowpopups attribute', function() {
-    it('can not open new window when not set', function(done) {
-      var listener = function(e) {
-        assert.equal(e.message, 'null');
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.src = "file://" + fixtures + "/pages/window-open-hide.html";
-      document.body.appendChild(webview);
-    });
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/partition/one.html`
+      });
 
-    it('can open new window when set', function(done) {
-      var listener = function(e) {
-        assert.equal(e.message, 'window');
-        webview.removeEventListener('console-message', listener);
-        done();
-      };
-      webview.addEventListener('console-message', listener);
-      webview.setAttribute('allowpopups', 'on');
-      webview.src = "file://" + fixtures + "/pages/window-open-hide.html";
-      document.body.appendChild(webview);
+      const parsedMessage = JSON.parse(message);
+      expect(parsedMessage).to.include({
+        numberOfEntries: 1,
+        testValue
+      });
     });
   });
 
-  describe('new-window event', function() {
-    it('emits when window.open is called', function(done) {
-      webview.addEventListener('new-window', function(e) {
-        assert.equal(e.url, 'http://host/');
-        assert.equal(e.frameName, 'host');
+  describe('allowpopups attribute', () => {
+    const generateSpecs = (description, webpreferences = '') => {
+      describe(description, () => {
+        it('can not open new window when not set', async () => {
+          const message = await startLoadingWebViewAndWaitForMessage(webview, {
+            webpreferences,
+            src: `file://${fixtures}/pages/window-open-hide.html`
+          });
+          expect(message).to.equal('null');
+        });
+
+        it('can open new window when set', async () => {
+          const message = await startLoadingWebViewAndWaitForMessage(webview, {
+            webpreferences,
+            allowpopups: 'on',
+            src: `file://${fixtures}/pages/window-open-hide.html`
+          });
+          expect(message).to.equal('window');
+        });
+      });
+    };
+
+    generateSpecs('without sandbox');
+    generateSpecs('with sandbox', 'sandbox=yes');
+    generateSpecs('with nativeWindowOpen', 'nativeWindowOpen=yes');
+  });
+
+  describe('webpreferences attribute', () => {
+    it('can enable nodeintegration', async () => {
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/d.html`,
+        webpreferences: 'nodeIntegration,contextIsolation=no'
+      });
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'function',
+        module: 'object',
+        process: 'object'
+      });
+    });
+
+    it('can disables web security and enable nodeintegration', async () => {
+      const result = await loadFileInWebView(webview, { webpreferences: 'webSecurity=no, nodeIntegration=yes, contextIsolation=no' });
+      expect(result).to.equal('loaded');
+      const type = await webview.executeJavaScript('typeof require');
+      expect(type).to.equal('function');
+    });
+  });
+
+  describe('new-window event', () => {
+    it('emits when window.open is called', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/window-open.html`,
+        allowpopups: true
+      });
+      const { url, frameName } = await waitForEvent(webview, 'new-window');
+
+      expect(url).to.equal('http://host/');
+      expect(frameName).to.equal('host');
+    });
+
+    it('emits when link with target is called', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/target-name.html`,
+        allowpopups: true
+      });
+      const { url, frameName } = await waitForEvent(webview, 'new-window');
+
+      expect(url).to.equal('http://host/');
+      expect(frameName).to.equal('target');
+    });
+  });
+
+  describe('ipc-message event', () => {
+    it('emits when guest sends an ipc message to browser', async () => {
+      loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/ipc-message.html`
+      });
+      const { frameId, channel, args } = await waitForEvent(webview, 'ipc-message');
+
+      expect(frameId).to.be.an('array').that.has.lengthOf(2);
+      expect(channel).to.equal('channel');
+      expect(args).to.deep.equal(['arg1', 'arg2']);
+    });
+  });
+
+  describe('page-title-set event', () => {
+    it('emits when title is set', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/a.html`
+      });
+      const { title, explicitSet } = await waitForEvent(webview, 'page-title-set');
+
+      expect(title).to.equal('test');
+      expect(explicitSet).to.be.true();
+    });
+  });
+
+  describe('page-favicon-updated event', () => {
+    it('emits when favicon urls are received', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/a.html`
+      });
+      const { favicons } = await waitForEvent(webview, 'page-favicon-updated');
+
+      expect(favicons).to.be.an('array').of.length(2);
+      if (process.platform === 'win32') {
+        expect(favicons[0]).to.match(/^file:\/\/\/[A-Z]:\/favicon.png$/i);
+      } else {
+        expect(favicons[0]).to.equal('file:///favicon.png');
+      }
+    });
+  });
+
+  describe('did-redirect-navigation event', () => {
+    let server = null;
+    let uri = null;
+
+    before((done) => {
+      server = http.createServer((req, res) => {
+        if (req.url === '/302') {
+          res.setHeader('Location', '/200');
+          res.statusCode = 302;
+          res.end();
+        } else {
+          res.end();
+        }
+      });
+      server.listen(0, '127.0.0.1', () => {
+        uri = `http://127.0.0.1:${(server.address()).port}`;
         done();
       });
-      webview.src = "file://" + fixtures + "/pages/window-open.html";
-      document.body.appendChild(webview);
     });
 
-    it('emits when link with target is called', function(done) {
-      webview.addEventListener('new-window', function(e) {
-        assert.equal(e.url, 'http://host/');
-        assert.equal(e.frameName, 'target');
-        done();
+    after(() => {
+      server.close();
+    });
+
+    it('is emitted on redirects', async () => {
+      loadWebView(webview, {
+        src: `${uri}/302`
       });
-      webview.src = "file://" + fixtures + "/pages/target-name.html";
-      document.body.appendChild(webview);
+
+      const event = await waitForEvent(webview, 'did-redirect-navigation');
+
+      expect(event.url).to.equal(`${uri}/200`);
+      expect(event.isInPlace).to.be.false();
+      expect(event.isMainFrame).to.be.true();
+      expect(event.frameProcessId).to.be.a('number');
+      expect(event.frameRoutingId).to.be.a('number');
     });
   });
 
-  describe('ipc-message event', function() {
-    it('emits when guest sends a ipc message to browser', function(done) {
-      webview.addEventListener('ipc-message', function(e) {
-        assert.equal(e.channel, 'channel');
-        assert.deepEqual(e.args, ['arg1', 'arg2']);
-        done();
+  describe('will-navigate event', () => {
+    it('emits when a url that leads to oustide of the page is clicked', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/webview-will-navigate.html`
       });
-      webview.src = "file://" + fixtures + "/pages/ipc-message.html";
-      webview.setAttribute('nodeintegration', 'on');
-      document.body.appendChild(webview);
+      const { url } = await waitForEvent(webview, 'will-navigate');
+
+      expect(url).to.equal('http://host/');
     });
   });
 
-  describe('page-title-set event', function() {
-    it('emits when title is set', function(done) {
-      webview.addEventListener('page-title-set', function(e) {
-        assert.equal(e.title, 'test');
-        assert(e.explicitSet);
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/a.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('page-favicon-updated event', function() {
-    it('emits when favicon urls are received', function(done) {
-      webview.addEventListener('page-favicon-updated', function(e) {
-        assert.equal(e.favicons.length, 2);
-        var pageUrl = process.platform === 'win32' ? 'file:///C:/favicon.png' : 'file:///favicon.png';
-        assert.equal(e.favicons[0], pageUrl);
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/a.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('will-navigate event', function() {
-    it('emits when a url that leads to oustide of the page is clicked', function(done) {
-      webview.addEventListener('will-navigate', function(e) {
-        assert.equal(e.url, "http://host/");
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/webview-will-navigate.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('did-navigate event', function() {
-    var p = path.join(fixtures, 'pages', 'webview-will-navigate.html');
+  describe('did-navigate event', () => {
+    let p = path.join(fixtures, 'pages', 'webview-will-navigate.html');
     p = p.replace(/\\/g, '/');
-    var pageUrl = url.format({
+    const pageUrl = url.format({
       protocol: 'file',
       slashes: true,
       pathname: p
     });
 
-    it('emits when a url that leads to outside of the page is clicked', function(done) {
-      webview.addEventListener('did-navigate', function(e) {
-        assert.equal(e.url, pageUrl);
-        done();
-      });
-      webview.src = pageUrl;
-      document.body.appendChild(webview);
+    it('emits when a url that leads to outside of the page is clicked', async () => {
+      loadWebView(webview, { src: pageUrl });
+      const { url } = await waitForEvent(webview, 'did-navigate');
+
+      expect(url).to.equal(pageUrl);
     });
   });
-  describe('did-navigate-in-page event', function() {
-    it('emits when an anchor link is clicked', function(done) {
-      var p = path.join(fixtures, 'pages', 'webview-did-navigate-in-page.html');
+
+  describe('did-navigate-in-page event', () => {
+    it('emits when an anchor link is clicked', async () => {
+      let p = path.join(fixtures, 'pages', 'webview-did-navigate-in-page.html');
       p = p.replace(/\\/g, '/');
-      var pageUrl = url.format({
+      const pageUrl = url.format({
         protocol: 'file',
         slashes: true,
         pathname: p
       });
-      webview.addEventListener('did-navigate-in-page', function(e) {
-        assert.equal(e.url, pageUrl + "#test_content");
-        done();
-      });
-      webview.src = pageUrl;
-      document.body.appendChild(webview);
+      loadWebView(webview, { src: pageUrl });
+      const event = await waitForEvent(webview, 'did-navigate-in-page');
+      expect(event.url).to.equal(`${pageUrl}#test_content`);
     });
 
-    it('emits when window.history.replaceState is called', function(done) {
-      webview.addEventListener('did-navigate-in-page', function(e) {
-        assert.equal(e.url, "http://host/");
-        done();
+    it('emits when window.history.replaceState is called', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/webview-did-navigate-in-page-with-history.html`
       });
-      webview.src = "file://" + fixtures + "/pages/webview-did-navigate-in-page-with-history.html";
-      document.body.appendChild(webview);
+      const { url } = await waitForEvent(webview, 'did-navigate-in-page');
+      expect(url).to.equal('http://host/');
     });
 
-    it('emits when window.location.hash is changed', function(done) {
-      var p = path.join(fixtures, 'pages', 'webview-did-navigate-in-page-with-hash.html');
+    it('emits when window.location.hash is changed', async () => {
+      let p = path.join(fixtures, 'pages', 'webview-did-navigate-in-page-with-hash.html');
       p = p.replace(/\\/g, '/');
-      var pageUrl = url.format({
+      const pageUrl = url.format({
         protocol: 'file',
         slashes: true,
         pathname: p
       });
-      webview.addEventListener('did-navigate-in-page', function(e) {
-        assert.equal(e.url, pageUrl + "#test");
-        done();
-      });
-      webview.src = pageUrl;
-      document.body.appendChild(webview);
+      loadWebView(webview, { src: pageUrl });
+      const event = await waitForEvent(webview, 'did-navigate-in-page');
+      expect(event.url).to.equal(`${pageUrl}#test`);
     });
   });
 
-  describe('close event', function() {
-    it('should fire when interior page calls window.close', function(done) {
-      webview.addEventListener('close', function() {
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/close.html";
-      document.body.appendChild(webview);
+  describe('close event', () => {
+    it('should fire when interior page calls window.close', async () => {
+      loadWebView(webview, { src: `file://${fixtures}/pages/close.html` });
+      await waitForEvent(webview, 'close');
     });
   });
 
-  describe('devtools-opened event', function() {
-    it('should fire when webview.openDevTools() is called', function(done) {
-      var listener = function() {
-        webview.removeEventListener('devtools-opened', listener);
-        webview.closeDevTools();
-        done();
-      };
-      webview.addEventListener('devtools-opened', listener);
-      webview.addEventListener('dom-ready', function() {
-        webview.openDevTools();
-      });
-      webview.src = "file://" + fixtures + "/pages/base-page.html";
-      document.body.appendChild(webview);
+  // FIXME(zcbenz): Disabled because of moving to OOPIF webview.
+  xdescribe('setDevToolsWebContents() API', () => {
+    it('sets webContents of webview as devtools', async () => {
+      const webview2 = new WebView();
+      loadWebView(webview2);
+
+      // Setup an event handler for further usage.
+      const waitForDomReady = waitForEvent(webview2, 'dom-ready');
+
+      loadWebView(webview, { src: 'about:blank' });
+      await waitForEvent(webview, 'dom-ready');
+      webview.getWebContents().setDevToolsWebContents(webview2.getWebContents());
+      webview.getWebContents().openDevTools();
+
+      await waitForDomReady;
+
+      // Its WebContents should be a DevTools.
+      const devtools = webview2.getWebContents();
+      expect(devtools.getURL().startsWith('devtools://devtools')).to.be.true();
+
+      const name = await devtools.executeJavaScript('InspectorFrontendHost.constructor.name');
+      document.body.removeChild(webview2);
+
+      expect(name).to.be.equal('InspectorFrontendHostImpl');
     });
   });
 
-  describe('devtools-closed event', function() {
-    it('should fire when webview.closeDevTools() is called', function(done) {
-      var listener2 = function() {
-        webview.removeEventListener('devtools-closed', listener2);
-        done();
-      };
-      var listener = function() {
-        webview.removeEventListener('devtools-opened', listener);
-        webview.closeDevTools();
-      };
-      webview.addEventListener('devtools-opened', listener);
-      webview.addEventListener('devtools-closed', listener2);
-      webview.addEventListener('dom-ready', function() {
-        webview.openDevTools();
+  describe('devtools-opened event', () => {
+    it('should fire when webview.openDevTools() is called', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/base-page.html`
       });
-      webview.src = "file://" + fixtures + "/pages/base-page.html";
-      document.body.appendChild(webview);
+      await waitForEvent(webview, 'dom-ready');
+
+      webview.openDevTools();
+      await waitForEvent(webview, 'devtools-opened');
+
+      webview.closeDevTools();
     });
   });
 
-  describe('devtools-focused event', function() {
-    it('should fire when webview.openDevTools() is called', function(done) {
-      var listener = function() {
-        webview.removeEventListener('devtools-focused', listener);
-        webview.closeDevTools();
-        done();
-      };
-      webview.addEventListener('devtools-focused', listener);
-      webview.addEventListener('dom-ready', function() {
-        webview.openDevTools();
+  describe('devtools-closed event', () => {
+    it('should fire when webview.closeDevTools() is called', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/base-page.html`
       });
-      webview.src = "file://" + fixtures + "/pages/base-page.html";
-      document.body.appendChild(webview);
+      await waitForEvent(webview, 'dom-ready');
+
+      webview.openDevTools();
+      await waitForEvent(webview, 'devtools-opened');
+
+      webview.closeDevTools();
+      await waitForEvent(webview, 'devtools-closed');
     });
   });
 
-  describe('<webview>.reload()', function() {
-    it('should emit beforeunload handler', function(done) {
-      var listener = function(e) {
-        assert.equal(e.channel, 'onbeforeunload');
-        webview.removeEventListener('ipc-message', listener);
-        done();
+  describe('devtools-focused event', () => {
+    it('should fire when webview.openDevTools() is called', async () => {
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/base-page.html`
+      });
+
+      const waitForDevToolsFocused = waitForEvent(webview, 'devtools-focused');
+
+      await waitForEvent(webview, 'dom-ready');
+      webview.openDevTools();
+
+      await waitForDevToolsFocused;
+      webview.closeDevTools();
+    });
+  });
+
+  describe('<webview>.reload()', () => {
+    it('should emit beforeunload handler', async () => {
+      await loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/beforeunload-false.html`
+      });
+
+      // Event handler has to be added before reload.
+      const waitForOnbeforeunload = waitForEvent(webview, 'ipc-message');
+
+      webview.reload();
+
+      const { channel } = await waitForOnbeforeunload;
+      expect(channel).to.equal('onbeforeunload');
+    });
+  });
+
+  describe('<webview>.goForward()', () => {
+    it('should work after a replaced history entry', (done) => {
+      let loadCount = 1;
+      const listener = (e) => {
+        if (loadCount === 1) {
+          expect(e.channel).to.equal('history');
+          expect(e.args[0]).to.equal(1);
+          expect(webview.canGoBack()).to.be.false();
+          expect(webview.canGoForward()).to.be.false();
+        } else if (loadCount === 2) {
+          expect(e.channel).to.equal('history');
+          expect(e.args[0]).to.equal(2);
+          expect(webview.canGoBack()).to.be.false();
+          expect(webview.canGoForward()).to.be.true();
+          webview.removeEventListener('ipc-message', listener);
+        }
       };
-      var listener2 = function() {
-        webview.reload();
-        webview.removeEventListener('did-finish-load', listener2);
+
+      const loadListener = () => {
+        try {
+          if (loadCount === 1) {
+            webview.src = `file://${fixtures}/pages/base-page.html`;
+          } else if (loadCount === 2) {
+            expect(webview.canGoBack()).to.be.true();
+            expect(webview.canGoForward()).to.be.false();
+
+            webview.goBack();
+          } else if (loadCount === 3) {
+            webview.goForward();
+          } else if (loadCount === 4) {
+            expect(webview.canGoBack()).to.be.true();
+            expect(webview.canGoForward()).to.be.false();
+
+            webview.removeEventListener('did-finish-load', loadListener);
+            done();
+          }
+
+          loadCount += 1;
+        } catch (e) {
+          done(e);
+        }
       };
+
       webview.addEventListener('ipc-message', listener);
-      webview.addEventListener('did-finish-load', listener2);
-      webview.setAttribute('nodeintegration', 'on');
-      webview.src = "file://" + fixtures + "/pages/beforeunload-false.html";
-      document.body.appendChild(webview);
+      webview.addEventListener('did-finish-load', loadListener);
+
+      loadWebView(webview, {
+        nodeintegration: 'on',
+        src: `file://${fixtures}/pages/history-replace.html`
+      });
     });
   });
 
-  describe('<webview>.clearHistory()', function() {
-    it('should clear the navigation history', function(done) {
-      var listener = function(e) {
-        assert.equal(e.channel, 'history');
-        assert.equal(e.args[0], 2);
-        assert(webview.canGoBack());
-        webview.clearHistory();
-        assert(!webview.canGoBack());
-        webview.removeEventListener('ipc-message', listener);
-        done();
-      };
-      webview.addEventListener('ipc-message', listener);
-      webview.setAttribute('nodeintegration', 'on');
-      webview.src = "file://" + fixtures + "/pages/history.html";
-      document.body.appendChild(webview);
+  // FIXME: https://github.com/electron/electron/issues/19397
+  xdescribe('<webview>.clearHistory()', () => {
+    it('should clear the navigation history', async () => {
+      const message = waitForEvent(webview, 'ipc-message');
+      await loadWebView(webview, {
+        nodeintegration: 'on',
+        src: `file://${fixtures}/pages/history.html`
+      });
+      const event = await message;
+
+      expect(event.channel).to.equal('history');
+      expect(event.args[0]).to.equal(2);
+      expect(webview.canGoBack()).to.be.true();
+
+      webview.clearHistory();
+      expect(webview.canGoBack()).to.be.false();
     });
   });
 
-  describe('basic auth', function() {
-    var auth = require('basic-auth');
+  describe('basic auth', () => {
+    const auth = require('basic-auth');
 
-    it('should authenticate with correct credentials', function(done) {
-      var message = 'Authenticated';
-      var server = http.createServer(function(req, res) {
-        var credentials = auth(req);
+    it('should authenticate with correct credentials', (done) => {
+      const message = 'Authenticated';
+      const server = http.createServer((req, res) => {
+        const credentials = auth(req);
         if (credentials.name === 'test' && credentials.pass === 'test') {
           res.end(message);
         } else {
@@ -512,195 +869,370 @@ describe('<webview> tag', function() {
         }
         server.close();
       });
-      server.listen(0, '127.0.0.1', function() {
-        var port = server.address().port;
-        webview.addEventListener('ipc-message', function(e) {
-          assert.equal(e.channel, message);
+      server.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        webview.addEventListener('ipc-message', (e) => {
+          try {
+            expect(e.channel).to.equal(message);
+            done();
+          } catch (e) {
+            done(e);
+          }
+        });
+        loadWebView(webview, {
+          nodeintegration: 'on',
+          webpreferences: 'contextIsolation=no',
+          src: `file://${fixtures}/pages/basic-auth.html?port=${port}`
+        });
+      });
+    });
+  });
+
+  describe('dom-ready event', () => {
+    it('emits when document is loaded', (done) => {
+      const server = http.createServer(() => {});
+      server.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        webview.addEventListener('dom-ready', () => {
           done();
         });
-        webview.src = "file://" + fixtures + "/pages/basic-auth.html?port=" + port;
-        webview.setAttribute('nodeintegration', 'on');
-        document.body.appendChild(webview);
-      });
-    });
-  });
-
-  describe('dom-ready event', function() {
-    it('emits when document is loaded', function(done) {
-      var server = http.createServer(function() {});
-      server.listen(0, '127.0.0.1', function() {
-        var port = server.address().port;
-        webview.addEventListener('dom-ready', function() {
-          done();
-        });
-        webview.src = "file://" + fixtures + "/pages/dom-ready.html?port=" + port;
-        document.body.appendChild(webview);
-      });
-    });
-
-    it('throws a custom error when an API method is called before the event is emitted', function() {
-      assert.throws(function () {
-        webview.stop();
-      }, 'Cannot call stop because the webContents is unavailable. The WebView must be attached to the DOM and the dom-ready event emitted before this method can be called.');
-    });
-  });
-
-  describe('executeJavaScript', function() {
-    if (process.env.TRAVIS !== 'true') {
-      return;
-    }
-
-    it('should support user gesture', function(done) {
-      var listener = function() {
-        webview.removeEventListener('enter-html-full-screen', listener);
-        done();
-      };
-      var listener2 = function() {
-        var jsScript = 'document.getElementsByTagName("video")[0].webkitRequestFullScreen()';
-        webview.executeJavaScript(jsScript, true);
-        webview.removeEventListener('did-finish-load', listener2);
-      };
-      webview.addEventListener('enter-html-full-screen', listener);
-      webview.addEventListener('did-finish-load', listener2);
-      webview.src = "file://" + fixtures + "/pages/fullscreen.html";
-      document.body.appendChild(webview);
-    });
-  });
-
-  describe('sendInputEvent', function() {
-    it('can send keyboard event', function(done) {
-      webview.addEventListener('ipc-message', function(e) {
-        assert.equal(e.channel, 'keyup');
-        assert.deepEqual(e.args, [67, true, false]);
-        done();
-      });
-      webview.addEventListener('dom-ready', function() {
-        webview.sendInputEvent({
-          type: 'keyup',
-          keyCode: 'c',
-          modifiers: ['shift']
+        loadWebView(webview, {
+          src: `file://${fixtures}/pages/dom-ready.html?port=${port}`
         });
       });
-      webview.src = "file://" + fixtures + "/pages/onkeyup.html";
-      webview.setAttribute('nodeintegration', 'on');
-      document.body.appendChild(webview);
     });
 
-    it('can send mouse event', function(done) {
-      webview.addEventListener('ipc-message', function(e) {
-        assert.equal(e.channel, 'mouseup');
-        assert.deepEqual(e.args, [10, 20, false, true]);
-        done();
-      });
-      webview.addEventListener('dom-ready', function() {
-        webview.sendInputEvent({
-          type: 'mouseup',
-          modifiers: ['ctrl'],
-          x: 10,
-          y: 20
-        });
-      });
-      webview.src = "file://" + fixtures + "/pages/onmouseup.html";
-      webview.setAttribute('nodeintegration', 'on');
-      document.body.appendChild(webview);
+    it('throws a custom error when an API method is called before the event is emitted', () => {
+      const expectedErrorMessage =
+          'The WebView must be attached to the DOM ' +
+          'and the dom-ready event emitted before this method can be called.';
+      expect(() => { webview.stop(); }).to.throw(expectedErrorMessage);
     });
   });
 
-  describe('media-started-playing media-paused events', function() {
-    it('emits when audio starts and stops playing', function(done) {
-      var audioPlayed = false;
-      webview.addEventListener('media-started-playing', function() {
-        audioPlayed = true;
+  describe('executeJavaScript', () => {
+    it('should support user gesture', async () => {
+      await loadWebView(webview, {
+        src: `file://${fixtures}/pages/fullscreen.html`
       });
-      webview.addEventListener('media-paused', function() {
-        assert(audioPlayed);
-        done();
+
+      // Event handler has to be added before js execution.
+      const waitForEnterHtmlFullScreen = waitForEvent(webview, 'enter-html-full-screen');
+
+      const jsScript = "document.querySelector('video').webkitRequestFullscreen()";
+      webview.executeJavaScript(jsScript, true);
+
+      return waitForEnterHtmlFullScreen;
+    });
+
+    it('can return the result of the executed script', async () => {
+      await loadWebView(webview, {
+        src: 'about:blank'
       });
-      webview.src = "file://" + fixtures + "/pages/audio.html";
-      document.body.appendChild(webview);
+
+      const jsScript = "'4'+2";
+      const expectedResult = '42';
+
+      const result = await webview.executeJavaScript(jsScript);
+      expect(result).to.equal(expectedResult);
     });
   });
 
-  describe('found-in-page event', function() {
-    it('emits when a request is made', function(done) {
-      var requestId = null;
-      var listener = function(e) {
-        assert.equal(e.result.requestId, requestId);
-        if (e.result.finalUpdate) {
-          assert.equal(e.result.matches, 3);
-          webview.stopFindInPage("clearSelection");
-          done();
+  it('supports inserting CSS', async () => {
+    await loadWebView(webview, { src: `file://${fixtures}/pages/base-page.html` });
+    await webview.insertCSS('body { background-repeat: round; }');
+    const result = await webview.executeJavaScript('window.getComputedStyle(document.body).getPropertyValue("background-repeat")');
+    expect(result).to.equal('round');
+  });
+
+  it('supports removing inserted CSS', async () => {
+    await loadWebView(webview, { src: `file://${fixtures}/pages/base-page.html` });
+    const key = await webview.insertCSS('body { background-repeat: round; }');
+    await webview.removeInsertedCSS(key);
+    const result = await webview.executeJavaScript('window.getComputedStyle(document.body).getPropertyValue("background-repeat")');
+    expect(result).to.equal('repeat');
+  });
+
+  describe('sendInputEvent', () => {
+    it('can send keyboard event', async () => {
+      loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/onkeyup.html`
+      });
+      await waitForEvent(webview, 'dom-ready');
+
+      const waitForIpcMessage = waitForEvent(webview, 'ipc-message');
+      webview.sendInputEvent({
+        type: 'keyup',
+        keyCode: 'c',
+        modifiers: ['shift']
+      });
+
+      const { channel, args } = await waitForIpcMessage;
+      expect(channel).to.equal('keyup');
+      expect(args).to.deep.equal(['C', 'KeyC', 67, true, false]);
+    });
+
+    it('can send mouse event', async () => {
+      loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        src: `file://${fixtures}/pages/onmouseup.html`
+      });
+      await waitForEvent(webview, 'dom-ready');
+
+      const waitForIpcMessage = waitForEvent(webview, 'ipc-message');
+      webview.sendInputEvent({
+        type: 'mouseup',
+        modifiers: ['ctrl'],
+        x: 10,
+        y: 20
+      });
+
+      const { channel, args } = await waitForIpcMessage;
+      expect(channel).to.equal('mouseup');
+      expect(args).to.deep.equal([10, 20, false, true]);
+    });
+  });
+
+  describe('media-started-playing media-paused events', () => {
+    beforeEach(function () {
+      if (!document.createElement('audio').canPlayType('audio/wav')) {
+        this.skip();
+      }
+    });
+
+    it('emits when audio starts and stops playing', async () => {
+      await loadWebView(webview, { src: `file://${fixtures}/pages/base-page.html` });
+
+      // With the new autoplay policy, audio elements must be unmuted
+      // see https://goo.gl/xX8pDD.
+      const source = `
+        const audio = document.createElement("audio")
+        audio.src = "../assets/tone.wav"
+        document.body.appendChild(audio);
+        audio.play()
+      `;
+      webview.executeJavaScript(source, true);
+      await waitForEvent(webview, 'media-started-playing');
+
+      webview.executeJavaScript('document.querySelector("audio").pause()', true);
+      await waitForEvent(webview, 'media-paused');
+    });
+  });
+
+  describe('found-in-page event', () => {
+    it('emits when a request is made', async () => {
+      const didFinishLoad = waitForEvent(webview, 'did-finish-load');
+      loadWebView(webview, { src: `file://${fixtures}/pages/content.html` });
+      // TODO(deepak1556): With https://codereview.chromium.org/2836973002
+      // focus of the webContents is required when triggering the api.
+      // Remove this workaround after determining the cause for
+      // incorrect focus.
+      webview.focus();
+      await didFinishLoad;
+
+      const activeMatchOrdinal = [];
+
+      for (;;) {
+        const foundInPage = waitForEvent(webview, 'found-in-page');
+        const requestId = webview.findInPage('virtual');
+        const event = await foundInPage;
+
+        expect(event.result.requestId).to.equal(requestId);
+        expect(event.result.matches).to.equal(3);
+
+        activeMatchOrdinal.push(event.result.activeMatchOrdinal);
+
+        if (event.result.activeMatchOrdinal === event.result.matches) {
+          break;
         }
-      };
-      var listener2 = function() {
-        requestId = webview.findInPage("virtual");
-      };
-      webview.addEventListener('found-in-page', listener);
-      webview.addEventListener('did-finish-load', listener2);
-      webview.src = "file://" + fixtures + "/pages/content.html";
-      document.body.appendChild(webview);
+      }
+
+      expect(activeMatchOrdinal).to.deep.equal([1, 2, 3]);
+      webview.stopFindInPage('clearSelection');
     });
   });
 
-  xdescribe('did-change-theme-color event', function() {
-    it('emits when theme color changes', function(done) {
-      webview.addEventListener('did-change-theme-color', function() {
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/theme-color.html";
-      document.body.appendChild(webview);
+  describe('<webview>.getWebContentsId', () => {
+    it('can return the WebContents ID', async () => {
+      const src = 'about:blank';
+      await loadWebView(webview, { src });
+
+      expect(webview.getWebContentsId()).to.be.a('number');
     });
   });
 
-  describe('permission-request event', function() {
-    function setUpRequestHandler(webview, requested_permission) {
-      const session = require('electron').remote.session;
-      var listener = function(webContents, permission, callback) {
-        if (webContents.getId() === webview.getId() ) {
-          assert.equal(permission, requested_permission);
-          callback(false);
-        }
+  describe('<webview>.capturePage()', () => {
+    before(function () {
+      // TODO(miniak): figure out why this is failing on windows
+      if (process.platform === 'win32') {
+        this.skip();
+      }
+    });
+
+    it('returns a Promise with a NativeImage', async () => {
+      const src = 'data:text/html,%3Ch1%3EHello%2C%20World!%3C%2Fh1%3E';
+      await loadWebView(webview, { src });
+
+      const image = await webview.capturePage();
+      const imgBuffer = image.toPNG();
+
+      // Check the 25th byte in the PNG.
+      // Values can be 0,2,3,4, or 6. We want 6, which is RGB + Alpha
+      expect(imgBuffer[25]).to.equal(6);
+    });
+  });
+
+  ifdescribe(features.isPrintingEnabled())('<webview>.printToPDF()', () => {
+    it('rejects on incorrectly typed parameters', async () => {
+      const badTypes = {
+        marginsType: 'terrible',
+        scaleFactor: 'not-a-number',
+        landscape: [],
+        pageRanges: { oops: 'im-not-the-right-key' },
+        headerFooter: '123',
+        printSelectionOnly: 1,
+        printBackground: 2,
+        pageSize: 'IAmAPageSize'
       };
-      session.fromPartition(webview.partition).setPermissionRequestHandler(listener);
-    }
 
-    it('emits when using navigator.getUserMedia api', function(done) {
-      webview.addEventListener('ipc-message', function(e) {
-        assert(e.channel, 'message');
-        assert(e.args, ['PermissionDeniedError']);
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/permissions/media.html";
-      webview.partition = "permissionTest";
-      webview.setAttribute('nodeintegration', 'on');
-      setUpRequestHandler(webview, "media");
-      document.body.appendChild(webview);
+      // These will hard crash in Chromium unless we type-check
+      for (const [key, value] of Object.entries(badTypes)) {
+        const param = { [key]: value };
+
+        const src = 'data:text/html,%3Ch1%3EHello%2C%20World!%3C%2Fh1%3E';
+        await loadWebView(webview, { src });
+        await expect(webview.printToPDF(param)).to.eventually.be.rejected();
+      }
     });
 
-    it('emits when using navigator.geolocation api', function(done) {
-      webview.addEventListener('ipc-message', function(e) {
-        assert(e.channel, 'message');
-        assert(e.args, ['ERROR(1): User denied Geolocation']);
-        done();
-      });
-      webview.src = "file://" + fixtures + "/pages/permissions/geolocation.html";
-      webview.partition = "permissionTest";
-      webview.setAttribute('nodeintegration', 'on');
-      setUpRequestHandler(webview, "geolocation");
-      document.body.appendChild(webview);
+    it('can print to PDF', async () => {
+      const src = 'data:text/html,%3Ch1%3EHello%2C%20World!%3C%2Fh1%3E';
+      await loadWebView(webview, { src });
+
+      const data = await webview.printToPDF({});
+      expect(data).to.be.an.instanceof(Uint8Array).that.is.not.empty();
+    });
+  });
+
+  describe('will-attach-webview event', () => {
+    it('does not emit when src is not changed', async () => {
+      console.log('loadWebView(webview)');
+      loadWebView(webview);
+      await delay();
+      const expectedErrorMessage =
+          'The WebView must be attached to the DOM ' +
+          'and the dom-ready event emitted before this method can be called.';
+      expect(() => { webview.stop(); }).to.throw(expectedErrorMessage);
     });
 
-    it('emits when using navigator.requestMIDIAccess api', function(done) {
-      webview.addEventListener('ipc-message', function(e) {
-        assert(e.channel, 'message');
-        assert(e.args, ['SecurityError']);
-        done();
+    it('supports changing the web preferences', async () => {
+      ipcRenderer.send('disable-node-on-next-will-attach-webview');
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        nodeintegration: 'yes',
+        src: `file://${fixtures}/pages/a.html`
       });
-      webview.src = "file://" + fixtures + "/pages/permissions/midi.html";
-      webview.partition = "permissionTest";
-      webview.setAttribute('nodeintegration', 'on');
-      setUpRequestHandler(webview, "midiSysex");
-      document.body.appendChild(webview);
+
+      const types = JSON.parse(message);
+      expect(types).to.include({
+        require: 'undefined',
+        module: 'undefined',
+        process: 'undefined',
+        global: 'undefined'
+      });
     });
+
+    it('supports preventing a webview from being created', async () => {
+      ipcRenderer.send('prevent-next-will-attach-webview');
+
+      loadWebView(webview, {
+        src: `file://${fixtures}/pages/c.html`
+      });
+      await waitForEvent(webview, 'destroyed');
+    });
+
+    it('supports removing the preload script', async () => {
+      ipcRenderer.send('disable-preload-on-next-will-attach-webview');
+
+      const message = await startLoadingWebViewAndWaitForMessage(webview, {
+        nodeintegration: 'yes',
+        preload: path.join(fixtures, 'module', 'preload-set-global.js'),
+        src: `file://${fixtures}/pages/a.html`
+      });
+
+      expect(message).to.equal('undefined');
+    });
+  });
+
+  describe('DOM events', () => {
+    let div;
+
+    beforeEach(() => {
+      div = document.createElement('div');
+      div.style.width = '100px';
+      div.style.height = '10px';
+      div.style.overflow = 'hidden';
+      webview.style.height = '100%';
+      webview.style.width = '100%';
+    });
+
+    afterEach(() => {
+      if (div != null) div.remove();
+    });
+
+    const generateSpecs = (description, sandbox) => {
+      describe(description, () => {
+        // TODO(nornagon): disabled during chromium roll 2019-06-11 due to a
+        // 'ResizeObserver loop limit exceeded' error on Windows
+        xit('emits resize events', async () => {
+          const firstResizeSignal = waitForEvent(webview, 'resize');
+          const domReadySignal = waitForEvent(webview, 'dom-ready');
+
+          webview.src = `file://${fixtures}/pages/a.html`;
+          webview.webpreferences = `sandbox=${sandbox ? 'yes' : 'no'}`;
+          div.appendChild(webview);
+          document.body.appendChild(div);
+
+          const firstResizeEvent = await firstResizeSignal;
+          expect(firstResizeEvent.target).to.equal(webview);
+          expect(firstResizeEvent.newWidth).to.equal(100);
+          expect(firstResizeEvent.newHeight).to.equal(10);
+
+          await domReadySignal;
+
+          const secondResizeSignal = waitForEvent(webview, 'resize');
+
+          const newWidth = 1234;
+          const newHeight = 789;
+          div.style.width = `${newWidth}px`;
+          div.style.height = `${newHeight}px`;
+
+          const secondResizeEvent = await secondResizeSignal;
+          expect(secondResizeEvent.target).to.equal(webview);
+          expect(secondResizeEvent.newWidth).to.equal(newWidth);
+          expect(secondResizeEvent.newHeight).to.equal(newHeight);
+        });
+
+        it('emits focus event', async () => {
+          const domReadySignal = waitForEvent(webview, 'dom-ready');
+          webview.src = `file://${fixtures}/pages/a.html`;
+          webview.webpreferences = `sandbox=${sandbox ? 'yes' : 'no'}`;
+          document.body.appendChild(webview);
+
+          await domReadySignal;
+
+          // If this test fails, check if webview.focus() still works.
+          const focusSignal = waitForEvent(webview, 'focus');
+          webview.focus();
+
+          await focusSignal;
+        });
+      });
+    };
+
+    generateSpecs('without sandbox', false);
+    generateSpecs('with sandbox', true);
   });
 });

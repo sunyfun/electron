@@ -1,83 +1,93 @@
 # Synopsis
 
-All of [Node.js's built-in modules](http://nodejs.org/api/) are available in
+> How to use Node.js and Electron APIs.
+
+All of [Node.js's built-in modules](https://nodejs.org/api/) are available in
 Electron and third-party node modules also fully supported as well (including
 the [native modules](../tutorial/using-native-node-modules.md)).
 
 Electron also provides some extra built-in modules for developing native
 desktop applications. Some modules are only available in the main process, some
 are only available in the renderer process (web page), and some can be used in
-both processes.
+either process type.
 
 The basic rule is: if a module is [GUI][gui] or low-level system related, then
 it should be only available in the main process. You need to be familiar with
-the concept of [main process vs. renderer process](../tutorial/quick-start.md#the-main-process) scripts to be
-able to use those modules.
+the concept of main process vs. renderer process
+scripts to be able to use those modules.
 
-The main process script is just like a normal Node.js script:
+The main process script is like a normal Node.js script:
 
 ```javascript
-const electron = require('electron');
-const app = electron.app;
-const BrowserWindow = electron.BrowserWindow;
+const { app, BrowserWindow } = require('electron')
+let win = null
 
-var window = null;
-
-app.on('ready', function() {
-  window = new BrowserWindow({width: 800, height: 600});
-  window.loadURL('https://github.com');
-});
+app.whenReady().then(() => {
+  win = new BrowserWindow({ width: 800, height: 600 })
+  win.loadURL('https://github.com')
+})
 ```
 
 The renderer process is no different than a normal web page, except for the
-extra ability to use node modules:
+extra ability to use node modules if `nodeIntegration` is enabled:
 
 ```html
 <!DOCTYPE html>
 <html>
 <body>
 <script>
-  const remote = require('electron').remote;
-  console.log(remote.app.getVersion());
+  const fs = require('fs')
+  console.log(fs.readFileSync(__filename, 'utf8'))
 </script>
 </body>
 </html>
 ```
 
-To run your app, read [Run your app](../tutorial/quick-start.md#run-your-app).
-
 ## Destructuring assignment
 
-If you are using CoffeeScript or Babel, you can also use
-[destructuring assignment][desctructuring-assignment] to make it easier to use
-built-in modules:
+As of 0.37, you can use
+[destructuring assignment][destructuring-assignment] to make it easier to use
+built-in modules.
 
 ```javascript
-const {app, BrowserWindow} = require('electron')
+const { app, BrowserWindow } = require('electron')
+
+let win
+
+app.whenReady().then(() => {
+  win = new BrowserWindow()
+  win.loadURL('https://github.com')
+})
 ```
 
-However if you are using plain JavaScript, you have to wait until Chrome fully
-supports ES6.
-
-## Disable old styles of using built-in modules
-
-Before v0.35.0, all built-in modules have to be used in the form of
-`require('module-name')`, though it has [many disadvantages][issue-387], we are
-still supporting it for compatibility with old apps.
-
-To disable the old styles completely, you can set the
-`ELECTRON_HIDE_INTERNAL_MODULES` environment variable:
+If you need the entire `electron` module, you can require it and then using
+destructuring to access the individual modules from `electron`.
 
 ```javascript
-process.env.ELECTRON_HIDE_INTERNAL_MODULES = 'true'
+const electron = require('electron')
+const { app, BrowserWindow } = electron
+
+let win
+
+app.whenReady().then(() => {
+  win = new BrowserWindow()
+  win.loadURL('https://github.com')
+})
 ```
 
-Or call the `hideInternalModules` API:
+This is equivalent to the following code:
 
 ```javascript
-require('electron').hideInternalModules()
+const electron = require('electron')
+const app = electron.app
+const BrowserWindow = electron.BrowserWindow
+let win
+
+app.whenReady().then(() => {
+  win = new BrowserWindow()
+  win.loadURL('https://github.com')
+})
 ```
 
 [gui]: https://en.wikipedia.org/wiki/Graphical_user_interface
-[desctructuring-assignment]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment
-[issue-387]: https://github.com/atom/electron/issues/387
+[destructuring-assignment]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment

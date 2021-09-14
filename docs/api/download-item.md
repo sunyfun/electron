@@ -1,101 +1,197 @@
-# DownloadItem
+## Class: DownloadItem
 
-`DownloadItem` is an EventEmitter represents a download item in Electron. It
-is used in `will-download` event of `Session` module, and allows users to
+> Control file downloads from remote sources.
+
+Process: [Main](../glossary.md#main-process)<br />
+_This class is not exported from the `'electron'` module. It is only available as a return value of other methods in the Electron API._
+
+`DownloadItem` is an [EventEmitter][event-emitter] that represents a download item in Electron.
+It is used in `will-download` event of `Session` class, and allows users to
 control the download item.
 
 ```javascript
 // In the main process.
-win.webContents.session.on('will-download', function(event, item, webContents) {
+const { BrowserWindow } = require('electron')
+const win = new BrowserWindow()
+win.webContents.session.on('will-download', (event, item, webContents) => {
   // Set the save path, making Electron not to prompt a save dialog.
-  item.setSavePath('/tmp/save.pdf');
-  console.log(item.getMimeType());
-  console.log(item.getFilename());
-  console.log(item.getTotalBytes());
-  item.on('updated', function() {
-    console.log('Received bytes: ' + item.getReceivedBytes());
-  });
-  item.on('done', function(e, state) {
-    if (state == "completed") {
-      console.log("Download successfully");
-    } else {
-      console.log("Download is cancelled or interrupted that can't be resumed");
+  item.setSavePath('/tmp/save.pdf')
+
+  item.on('updated', (event, state) => {
+    if (state === 'interrupted') {
+      console.log('Download is interrupted but can be resumed')
+    } else if (state === 'progressing') {
+      if (item.isPaused()) {
+        console.log('Download is paused')
+      } else {
+        console.log(`Received bytes: ${item.getReceivedBytes()}`)
+      }
     }
-  });
+  })
+  item.once('done', (event, state) => {
+    if (state === 'completed') {
+      console.log('Download successfully')
+    } else {
+      console.log(`Download failed: ${state}`)
+    }
+  })
+})
 ```
 
-## Events
+### Instance Events
 
-### Event: 'updated'
+#### Event: 'updated'
 
-Emits when the `downloadItem` gets updated.
-
-### Event: 'done'
+Returns:
 
 * `event` Event
-* `state` String
-  * `completed` - The download completed successfully.
-  * `cancelled` - The download has been cancelled.
-  * `interrupted` - An error broke the connection with the file server.
+* `state` String - Can be `progressing` or `interrupted`.
 
-Emits when the download is in a terminal state. This includes a completed
-download, a cancelled download(via `downloadItem.cancel()`), and interrupted
+Emitted when the download has been updated and is not done.
+
+The `state` can be one of following:
+
+* `progressing` - The download is in-progress.
+* `interrupted` - The download has interrupted and can be resumed.
+
+#### Event: 'done'
+
+Returns:
+
+* `event` Event
+* `state` String - Can be `completed`, `cancelled` or `interrupted`.
+
+Emitted when the download is in a terminal state. This includes a completed
+download, a cancelled download (via `downloadItem.cancel()`), and interrupted
 download that can't be resumed.
 
-## Methods
+The `state` can be one of following:
+
+* `completed` - The download completed successfully.
+* `cancelled` - The download has been cancelled.
+* `interrupted` - The download has interrupted and can not resume.
+
+### Instance Methods
 
 The `downloadItem` object has the following methods:
 
-### `downloadItem.setSavePath(path)`
+#### `downloadItem.setSavePath(path)`
 
 * `path` String - Set the save file path of the download item.
 
 The API is only available in session's `will-download` callback function.
+If `path` doesn't exist, Electron will try to make the directory recursively.
 If user doesn't set the save path via the API, Electron will use the original
-routine to determine the save path(Usually prompts a save dialog).
+routine to determine the save path; this usually prompts a save dialog.
 
-### `downloadItem.pause()`
+#### `downloadItem.getSavePath()`
+
+Returns `String` - The save path of the download item. This will be either the path
+set via `downloadItem.setSavePath(path)` or the path selected from the shown
+save dialog.
+
+#### `downloadItem.setSaveDialogOptions(options)`
+
+* `options` SaveDialogOptions - Set the save file dialog options. This object has the same
+properties as the `options` parameter of [`dialog.showSaveDialog()`](dialog.md).
+
+This API allows the user to set custom options for the save dialog that opens
+for the download item by default.
+The API is only available in session's `will-download` callback function.
+
+#### `downloadItem.getSaveDialogOptions()`
+
+Returns `SaveDialogOptions` - Returns the object previously set by `downloadItem.setSaveDialogOptions(options)`.
+
+#### `downloadItem.pause()`
 
 Pauses the download.
 
-### `downloadItem.resume()`
+#### `downloadItem.isPaused()`
+
+Returns `Boolean` - Whether the download is paused.
+
+#### `downloadItem.resume()`
 
 Resumes the download that has been paused.
 
-### `downloadItem.cancel()`
+**Note:** To enable resumable downloads the server you are downloading from must support range requests and provide both `Last-Modified` and `ETag` header values. Otherwise `resume()` will dismiss previously received bytes and restart the download from the beginning.
+
+#### `downloadItem.canResume()`
+
+Returns `Boolean` - Whether the download can resume.
+
+#### `downloadItem.cancel()`
 
 Cancels the download operation.
 
-### `downloadItem.getURL()`
+#### `downloadItem.getURL()`
 
-Returns a `String` represents the origin url where the item is downloaded from.
+Returns `String` - The origin URL where the item is downloaded from.
 
-### `downloadItem.getMimeType()`
+#### `downloadItem.getMimeType()`
 
-Returns a `String` represents the mime type.
+Returns `String` - The files mime type.
 
-### `downloadItem.hasUserGesture()`
+#### `downloadItem.hasUserGesture()`
 
-Returns a `Boolean` indicates whether the download has user gesture.
+Returns `Boolean` - Whether the download has user gesture.
 
-### `downloadItem.getFilename()`
+#### `downloadItem.getFilename()`
 
-Returns a `String` represents the file name of the download item.
+Returns `String` - The file name of the download item.
 
 **Note:** The file name is not always the same as the actual one saved in local
 disk. If user changes the file name in a prompted download saving dialog, the
 actual name of saved file will be different.
 
-### `downloadItem.getTotalBytes()`
+#### `downloadItem.getTotalBytes()`
 
-Returns a `Integer` represents the total size in bytes of the download item.
+Returns `Integer` - The total size in bytes of the download item.
+
 If the size is unknown, it returns 0.
 
-### `downloadItem.getReceivedBytes()`
+#### `downloadItem.getReceivedBytes()`
 
-Returns a `Integer` represents the received bytes of the download item.
+Returns `Integer` - The received bytes of the download item.
 
-### `downloadItem.getContentDisposition()`
+#### `downloadItem.getContentDisposition()`
 
-Returns a `String` represents the Content-Disposition field from the response
+Returns `String` - The Content-Disposition field from the response
 header.
+
+#### `downloadItem.getState()`
+
+Returns `String` - The current state. Can be `progressing`, `completed`, `cancelled` or `interrupted`.
+
+**Note:** The following methods are useful specifically to resume a
+`cancelled` item when session is restarted.
+
+#### `downloadItem.getURLChain()`
+
+Returns `String[]` - The complete URL chain of the item including any redirects.
+
+#### `downloadItem.getLastModifiedTime()`
+
+Returns `String` - Last-Modified header value.
+
+#### `downloadItem.getETag()`
+
+Returns `String` - ETag header value.
+
+#### `downloadItem.getStartTime()`
+
+Returns `Double` - Number of seconds since the UNIX epoch when the download was
+started.
+
+### Instance Properties
+
+#### `downloadItem.savePath`
+
+A `String` property that determines the save file path of the download item.
+
+The property is only available in session's `will-download` callback function.
+If user doesn't set the save path via the property, Electron will use the original
+routine to determine the save path; this usually prompts a save dialog.
+
+[event-emitter]: https://nodejs.org/api/events.html#events_class_eventemitter

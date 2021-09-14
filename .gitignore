@@ -1,21 +1,56 @@
 .DS_Store
+.env
+.gclient_done
+**/.npmrc
 .tags*
-/.idea/
-/build/
-/dist/
-/external_binaries/
-/out/
-/vendor/brightray/vendor/download/
-/vendor/debian_wheezy_arm-sysroot/
-/vendor/debian_wheezy_i386-sysroot/
-/vendor/python_26/
-/vendor/npm/
-/vendor/llvm/
-/vendor/llvm-build/
-/vendor/.gclient
-node_modules/
-*.xcodeproj
-*.swp
+.vs/
+.vscode/
+*.log
 *.pyc
-debug.log
-npm-debug.log
+*.sln
+*.swp
+*.VC.db
+*.VC.VC.opendb
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.xcodeproj
+/.idea/
+/dist/
+node_modules/
+SHASUMS256.txt
+**/package-lock.json
+compile_commands.json
+.envrc
+
+# npm package
+/npm/dist
+/npm/path.txt
+/npm/checksums.json
+
+.npmrc
+
+# Generated API definitions
+electron-api.json
+electron.d.ts
+
+# Spec hash calculation
+spec/.hash
+
+# Eslint Cache
+.eslintcache*
+
+# Generated native addon files
+/spec-main/fixtures/native-addon/echo/build/
+
+# If someone runs tsc this is where stuff will end up
+ts-gen
+
+# Used to accelerate CI builds
+.depshash
+.depshash-target
+
+# Used to accelerate builds after sync
+patches/mtime-cache.json
+
+spec/fixtures/logo.png
